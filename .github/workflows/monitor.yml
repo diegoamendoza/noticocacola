@@ -2,15 +2,15 @@ name: Monitor laminas Mundial 2026
 
 on:
   schedule:
-    # GitHub no permite menos de 5 min en el cron. El chequeo por minuto
-    # lo hace el loop interno del script (LOOP_MINUTES + CHECK_INTERVAL).
-    - cron: "*/5 * * * *"
-  workflow_dispatch:        # permite lanzarlo a mano desde la pestana Actions
+    - cron: "*/5 * * * *"   # respaldo por si falla el auto-relanzamiento
+  workflow_dispatch:         # permite lanzarlo a mano desde la pestana Actions
 
 jobs:
   revisar-stock:
     runs-on: ubuntu-latest
     timeout-minutes: 8
+    permissions:
+      actions: write         # necesario para que gh workflow run funcione
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,16 +22,19 @@ jobs:
 
       - name: Revisar stock
         env:
-          # --- chequeo ---
-          LOOP_MINUTES: "5"        # dura ~5 min revisando, luego el cron lo relanza
-          CHECK_INTERVAL: "60"     # revisa cada 60 segundos
+          LOOP_MINUTES: "5"
+          CHECK_INTERVAL: "60"
           SALES_CHANNEL: "1"
-          # --- aviso al celular (ntfy) ---
           USE_NTFY: "true"
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-          # --- aviso por correo (opcional) ---
           USE_EMAIL: ${{ secrets.USE_EMAIL }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
         run: python check_stock.py
+
+      - name: Relanzar workflow
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run monitor.yml --ref ${{ github.ref_name }}
