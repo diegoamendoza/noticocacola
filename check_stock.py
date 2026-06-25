@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-check_stock.py  -  Version para GitHub Actions.
+check_stock.py  -  Version para Railway (loop infinito).
 
 Revisa el stock de laminas/sobres del Mundial 2026 en miCoca-Cola.cl
-usando la API publica de catalogo de VTEX. Esta pensado para correr dentro
-de un job de GitHub Actions: hace un loop revisando cada 60 segundos durante
-LOOP_MINUTES minutos y luego termina (el cron del workflow lo vuelve a lanzar).
+cada CHECK_INTERVAL segundos, para siempre. Railway lo mantiene vivo
+como un proceso continuo, sin necesidad de cron ni reinicios manuales.
 
-Toda la configuracion sensible (topic de ntfy, correo) se lee desde variables
-de entorno, que en GitHub se guardan como "Secrets". Solo libreria estandar.
+Variables de entorno (se configuran en el panel de Railway):
+  NTFY_TOPIC          topic secreto de ntfy (requerido para aviso celular)
+  CHECK_INTERVAL      segundos entre chequeos (default: 60)
+  USE_EMAIL           true/false (default: false)
+  EMAIL_FROM/TO/APP_PASSWORD  para Gmail
+  SALES_CHANNEL       canal VTEX (default: 1)
+  SEARCH_TERMS        terminos separados por coma
+  NAME_KEYWORDS       filtro de nombre separado por coma, o "none" para no filtrar
 """
 
 import os
@@ -19,11 +24,10 @@ import ssl
 import smtplib
 import urllib.parse
 import urllib.request
-import urllib.error
 from email.message import EmailMessage
 from datetime import datetime, timezone
 
-# ----------------- Config fija del sitio -----------------
+# ----------------- Config del sitio -----------------
 PAGE_URL = "https://andina.micoca-cola.cl/laminas-coleccionables-mundial-fifa-2026"
 API_BASE = "https://andina.micoca-cola.cl/api/catalog_system/pub/products/search"
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -34,19 +38,20 @@ USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
 def env(name, default=""):
     return os.environ.get(name, default).strip()
 
-
 def env_list(name, default_list):
     raw = env(name)
     if not raw:
         return default_list
     return [x.strip() for x in raw.split(",") if x.strip()]
 
-
 def env_bool(name, default=False):
     return env(name, str(default)).lower() in ("1", "true", "yes", "si", "sí")
 
 
-SALES_CHANNEL = env("SALES_CHANNEL", "1")
+# ----------------- Variables de config -----------------
+SALES_CHANNEL  = env("SALES_CHANNEL", "1")
+CHECK_INTERVAL = int(env("CHECK_INTERVAL", "60"))
+
 SEARCH_TERMS = env_list("SEARCH_TERMS", [
     "laminas mundial", "sobres mundial",
     "album mundial 2026", "coleccionables mundial fifa",
@@ -54,36 +59,32 @@ SEARCH_TERMS = env_list("SEARCH_TERMS", [
 NAME_KEYWORDS = env_list("NAME_KEYWORDS", [
     "lamin", "sobre", "album", "coleccion", "panini", "fifa", "mundial",
 ])
-# Si NAME_KEYWORDS viene como "none" o "*" -> no filtra
 if [k.lower() for k in NAME_KEYWORDS] in (["none"], ["*"]):
     NAME_KEYWORDS = []
 
-CHECK_INTERVAL = int(env("CHECK_INTERVAL", "60"))   # segundos entre chequeos
-LOOP_MINUTES = float(env("LOOP_MINUTES", "5"))      # cuanto dura el loop en este job
+USE_NTFY           = env_bool("USE_NTFY", True)
+NTFY_TOPIC         = env("NTFY_TOPIC")
+NTFY_SERVER        = env("NTFY_SERVER", "https://ntfy.sh")
 
-USE_NTFY = env_bool("USE_NTFY", True)
-NTFY_TOPIC = env("NTFY_TOPIC")
-NTFY_SERVER = env("NTFY_SERVER", "https://ntfy.sh")
-
-USE_EMAIL = env_bool("USE_EMAIL", False)
-EMAIL_FROM = env("EMAIL_FROM")
-EMAIL_TO = env("EMAIL_TO")
+USE_EMAIL          = env_bool("USE_EMAIL", False)
+EMAIL_FROM         = env("EMAIL_FROM")
+EMAIL_TO           = env("EMAIL_TO")
 EMAIL_APP_PASSWORD = env("EMAIL_APP_PASSWORD")
-SMTP_HOST = env("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(env("SMTP_PORT", "465"))
+SMTP_HOST          = env("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT          = int(env("SMTP_PORT", "465"))
 
 
 def log(msg):
-    print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC] {msg}", flush=True)
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ts} UTC] {msg}", flush=True)
 
 
 # ----------------- Logica de catalogo -----------------
 def http_get_json(url):
-    req = urllib.request.Request(url, headers={
-        "User-Agent": USER_AGENT, "Accept": "application/json"})
+    req = urllib.request.Request(
+        url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=25) as resp:
         return json.loads(resp.read().decode("utf-8", errors="replace"))
-
 
 def buscar_productos():
     encontrados = {}
@@ -101,13 +102,10 @@ def buscar_productos():
             log(f"  aviso: error buscando '{term}': {e}")
     return list(encontrados.values())
 
-
 def nombre_coincide(nombre):
     if not NAME_KEYWORDS:
         return True
-    n = nombre.lower()
-    return any(k in n for k in NAME_KEYWORDS)
-
+    return any(k in nombre.lower() for k in NAME_KEYWORDS)
 
 def detectar_disponibles(productos):
     hits = {}
@@ -120,10 +118,14 @@ def detectar_disponibles(productos):
         for item in p.get("items", []):
             for seller in item.get("sellers", []):
                 offer = seller.get("commertialOffer", {}) or {}
-                qty = offer.get("AvailableQuantity", 0) or 0
+                qty   = offer.get("AvailableQuantity", 0) or 0
                 if offer.get("IsAvailable", False) or qty > 0:
-                    hits[nombre] = {"nombre": nombre, "precio": offer.get("Price"),
-                                    "cantidad": qty, "link": link}
+                    hits[nombre] = {
+                        "nombre": nombre,
+                        "precio": offer.get("Price"),
+                        "cantidad": qty,
+                        "link": link,
+                    }
                     break
     return list(hits.values())
 
@@ -133,8 +135,9 @@ def notificar_ntfy(cuerpo):
     if not (USE_NTFY and NTFY_TOPIC):
         return
     try:
-        req = urllib.request.Request(f"{NTFY_SERVER}/{NTFY_TOPIC}",
-                                     data=cuerpo.encode("utf-8"), method="POST")
+        req = urllib.request.Request(
+            f"{NTFY_SERVER}/{NTFY_TOPIC}",
+            data=cuerpo.encode("utf-8"), method="POST")
         req.add_header("Title", "STOCK Laminas Mundial 2026!")
         req.add_header("Priority", "urgent")
         req.add_header("Tags", "soccer,shopping,rotating_light")
@@ -143,7 +146,6 @@ def notificar_ntfy(cuerpo):
         log("  -> ntfy enviado")
     except Exception as e:
         log(f"  error ntfy: {e}")
-
 
 def notificar_email(cuerpo):
     if not (USE_EMAIL and EMAIL_FROM and EMAIL_TO and EMAIL_APP_PASSWORD):
@@ -161,7 +163,6 @@ def notificar_email(cuerpo):
     except Exception as e:
         log(f"  error correo: {e}")
 
-
 def avisar(hits):
     lineas = []
     for h in hits:
@@ -173,36 +174,37 @@ def avisar(hits):
     notificar_email(cuerpo)
 
 
-# ----------------- Loop principal del job -----------------
+# ----------------- Loop infinito -----------------
 def main():
-    log(f"Job iniciado. Loop de {LOOP_MINUTES} min, chequeo cada {CHECK_INTERVAL}s.")
+    log(f"Monitor iniciado. Chequeando cada {CHECK_INTERVAL}s. Ctrl+C para detener.")
+    if USE_NTFY and NTFY_TOPIC:
+        notificar_ntfy(f"Monitor activo. Revisando cada {CHECK_INTERVAL}s.")
     avisados = set()
-    deadline = time.time() + LOOP_MINUTES * 60
-    primera = True
 
-    while primera or time.time() < deadline:
-        primera = False
+    while True:
         try:
-            hits = detectar_disponibles(buscar_productos())
+            hits     = detectar_disponibles(buscar_productos())
             actuales = {h["nombre"] for h in hits}
-            nuevos = [h for h in hits if h["nombre"] not in avisados]
+            nuevos   = [h for h in hits if h["nombre"] not in avisados]
+
             if nuevos:
                 log(f"STOCK DETECTADO: {', '.join(h['nombre'] for h in nuevos)}")
                 avisar(nuevos)
-                avisados |= actuales
             elif hits:
-                log(f"con stock (ya avisado en este job): {', '.join(actuales)}")
+                log(f"con stock (ya avisado): {', '.join(actuales)}")
             else:
                 log("sin stock todavia")
+
+            # si un producto desaparece del stock, lo sacamos para re-avisar si vuelve
+            avisados = actuales
+
+        except KeyboardInterrupt:
+            log("Detenido por el usuario.")
+            break
         except Exception as e:
             log(f"error en ciclo: {e}")
 
-        if time.time() + CHECK_INTERVAL < deadline:
-            time.sleep(CHECK_INTERVAL)
-        else:
-            break
-
-    log("Job terminado.")
+        time.sleep(CHECK_INTERVAL)
 
 
 if __name__ == "__main__":
