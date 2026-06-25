@@ -1,11 +1,8 @@
 app = "noticocacola"
 primary_region = "gru"
 
-[build]
-  builder = "paketobuildpacks/builder:base"
-
 [processes]
-  worker = "python check_stock.py"
+  app = "python check_stock.py"
 
 [[vm]]
   cpu_kind = "shared"
