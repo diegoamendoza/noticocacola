@@ -2,15 +2,15 @@ name: Monitor laminas Mundial 2026
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # respaldo por si falla el auto-relanzamiento
-  workflow_dispatch:         # permite lanzarlo a mano desde la pestana Actions
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
 
 jobs:
   revisar-stock:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     permissions:
-      actions: write         # necesario para que gh workflow run funcione
+      actions: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,6 +31,9 @@ jobs:
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+          # Variables (no secrets)
+          SEARCH_TERMS: ${{ vars.SEARCH_TERMS }}
+          NAME_KEYWORDS: ${{ vars.NAME_KEYWORDS }}
         run: python check_stock.py
 
       - name: Relanzar workflow
