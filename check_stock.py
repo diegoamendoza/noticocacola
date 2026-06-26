@@ -177,12 +177,17 @@ def avisar(hits):
 # ----------------- Loop infinito -----------------
 def main():
     log(f"Monitor iniciado. Chequeando cada {CHECK_INTERVAL}s. Ctrl+C para detener.")
-    if USE_NTFY and NTFY_TOPIC:
-        notificar_ntfy(f"Monitor activo. Revisando cada {CHECK_INTERVAL}s.")
     avisados = set()
+    last_heartbeat_hour = -1
 
     while True:
         try:
+            now = datetime.now(timezone.utc)
+            if now.minute == 0 and now.hour != last_heartbeat_hour:
+                if USE_NTFY and NTFY_TOPIC:
+                    notificar_ntfy(f"Monitor activo. Revisando cada {CHECK_INTERVAL}s.")
+                last_heartbeat_hour = now.hour
+
             hits     = detectar_disponibles(buscar_productos())
             actuales = {h["nombre"] for h in hits}
             nuevos   = [h for h in hits if h["nombre"] not in avisados]
