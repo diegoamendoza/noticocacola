@@ -64,6 +64,7 @@ if [k.lower() for k in NAME_KEYWORDS] in (["none"], ["*"]):
 
 USE_NTFY           = env_bool("USE_NTFY", True)
 NTFY_TOPIC         = env("NTFY_TOPIC")
+HEARTBEAT_ENABLED  = env_bool("HEARTBEAT_ENABLED", False)
 NTFY_SERVER        = env("NTFY_SERVER", "https://ntfy.sh")
 
 USE_EMAIL          = env_bool("USE_EMAIL", False)
@@ -183,7 +184,7 @@ def main():
     while True:
         try:
             now = datetime.now(timezone.utc)
-            if now.minute == 0 and now.hour != last_heartbeat_hour:
+            if HEARTBEAT_ENABLED and now.minute == 0 and now.hour != last_heartbeat_hour:
                 if USE_NTFY and NTFY_TOPIC:
                     notificar_ntfy(f"Monitor activo. Revisando cada {CHECK_INTERVAL}s.")
                 last_heartbeat_hour = now.hour
